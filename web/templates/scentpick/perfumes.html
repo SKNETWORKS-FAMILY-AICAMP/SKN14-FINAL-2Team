@@ -1,0 +1,234 @@
+{% extends "scentpick/base.html" %}
+{% block title %}향수 리스트 - ScentPick{% endblock %}
+
+{% block content %}
+<h2 style="margin-bottom:20px;color:#111827;">향수 리스트</h2>
+
+<!-- =======================
+     상단 검색 영역
+======================= -->
+<form id="searchForm" method="get" 
+      style="margin-bottom:16px;display:flex;align-items:stretch;gap:0;width:1215px;height:44px;">
+  <input type="text" name="q" value="{{ selected.q }}" class="search-bar"
+         placeholder="향수 이름, 브랜드, 메인 어코드로 검색"
+         style="flex:1;height:100%;padding:0 14px;border:1px solid #e5e7eb;border-right:none;
+                border-radius:12px 0 0 12px;background:#f8fafc;outline:none;box-sizing:border-box;">
+  <button type="submit"
+          style="width:80px;height:100%;border:1px solid #e5e7eb;border-left:none;
+                 border-radius:0 12px 12px 0;background:#6366F1;color:white;
+                 font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-sizing:border-box;">
+    검색
+  </button>
+</form>
+
+<div style="display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start;">
+  <!-- =======================
+       좌측 필터 영역
+  ======================= -->
+  <aside style="background:#fff;border-radius:16px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,.06);position:sticky;top:12px;">
+    <form id="filterForm" method="get" style="display:flex;flex-direction:column;gap:16px;">
+      {% if selected.q %}<input type="hidden" name="q" value="{{ selected.q }}">{% endif %}
+
+      <!-- 브랜드 필터 -->
+      <details class="filter-section">
+        <summary style="cursor:pointer;font-weight:600;">브랜드</summary>
+        <div style="display:flex;flex-direction:column;gap:6px;max-height:180px;overflow:auto;font-size:13px;margin-top:6px;margin-left:6px;">
+          {% for b in brands %}
+            <label>
+              <input type="checkbox" name="brand" value="{{ b }}"
+                     {% if b in selected.brand %}checked{% endif %}>
+              {{ b }}
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+
+      <!-- 성별 필터 -->
+      <details class="filter-section">
+        <summary style="cursor:pointer;font-weight:600;">성별</summary>
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;margin-top:6px;margin-left:6px;">
+          {% for g in genders %}
+            <label><input type="checkbox" name="gender" value="{{ g }}" {% if g in selected.gender %}checked{% endif %}> {{ g }}</label>
+          {% endfor %}
+        </div>
+      </details>
+
+      <!-- 농도 필터 -->
+      <details class="filter-section">
+        <summary style="cursor:pointer;font-weight:600;">농도</summary>
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;margin-top:6px;margin-left:6px;">
+          {% for c in concentrations %}
+            <label><input type="checkbox" name="conc" value="{{ c }}" {% if c in selected.conc %}checked{% endif %}> {{ c }}</label>
+          {% endfor %}
+        </div>
+      </details>
+
+      <!-- 메인어코드 필터 (동의어 그룹화됨) -->
+      <details class="filter-section">
+        <summary style="cursor:pointer;font-weight:600;">메인어코드</summary>
+        <div id="accordBox" style="display:flex;flex-direction:column;gap:6px;max-height:180px;overflow:auto;font-size:13px;margin-top:6px;margin-left:6px;">
+          {% for a in accords %}
+            <label>
+              <input type="checkbox" name="accord" value="{{ a }}"
+                     {% if a in selected.accord %}checked{% endif %}>
+              {{ a }}
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+    </form>
+  </aside>
+
+  <!--우측 향수 카드 리스트-->
+  <section id="products">
+    {% include "scentpick/perfumes_grid.html" %}
+  </section>
+</div>
+{% endblock content %}
+
+{% block script %}
+<script>
+(function () {
+  const filterForm = document.getElementById('filterForm');
+  const searchForm = document.getElementById('searchForm');
+  const products   = document.getElementById('products');
+
+  /*메인어코드 동의어 그룹 정의*/
+  const ACCORD_GROUPS = {
+    '플로랄':   ['플로랄','플로럴','흘로랄','화이트플로랄','화이트 플로랄','플라워','꽃','플로'],
+    '아쿠아틱': ['아쿠아틱','마린','워터리','오션','해양','바다','오조닉','오조니ック'],
+    '머스크':   ['머스크','머스키','머스','무스크','무시'],
+    '그린':     ['그린','허브','허벌','풀','잔디','모스','오크모스','모시','모씨'],
+    '우디':     ['우디','우드','나무','우드티'],
+    '시트러스': ['시트러스','시트라스','시트릭','시트러','스트러스'],
+    '스파이시': ['스파이시','스파이스','스파이','웜스파이스','웜스파이시'],
+    '파우더리': ['파우더리','파우더'],
+    '바닐라':   ['바닐라','바닐','바닐린'],
+    '프루티':   ['프루티','프룻티','프루트','푸루티','푸르티','프루'],
+    '앰버':     ['앰버','엠버','암버'],
+    '레더':     ['레더','가죽'],
+    '로즈':     ['로즈','장미'],
+    //
+  };
+
+  /*메인어코드 체크박스 UI 재구성*/
+  function rebuildAccordList(){
+    const box = document.getElementById('accordBox');
+    if (!box) return;
+
+    const originals = Array.from(box.querySelectorAll('label')).map(l => l.textContent.trim());
+    const originalSet = new Set(originals);
+    const selected = new Set(new URLSearchParams(location.search).getAll('accord'));
+
+    const frag = document.createDocumentFragment();
+    const used = new Set();
+
+    // (a) 동의어 그룹 기반 항목 생성
+    Object.entries(ACCORD_GROUPS).forEach(([canon, syns]) => {
+      const isChecked = syns.some(s => selected.has(s) || selected.has(canon));
+      const label = document.createElement('label');
+      label.innerHTML =
+        `<input type="checkbox" name="accord" value="${canon}"
+                data-synonyms="${[canon, ...syns].join('|')}" ${isChecked ? 'checked':''}> ${canon}`;
+      frag.appendChild(label);
+      syns.forEach(s => used.add(s));
+      used.add(canon);
+    });
+
+    // (b) 그룹에 없는 나머지 추가
+    const rest = [...originalSet].filter(a => !used.has(a));
+    rest.sort((a,b)=>a.localeCompare(b,'ko'));
+    rest.forEach(a => {
+      const isChecked = selected.has(a);
+      const label = document.createElement('label');
+      label.innerHTML =
+        `<input type="checkbox" name="accord" value="${a}"
+                data-synonyms="${a}" ${isChecked ? 'checked':''}> ${a}`;
+      frag.appendChild(label);
+    });
+
+    box.innerHTML = '';
+    box.appendChild(frag);
+  }
+
+  /* 쿼리 빌드*/
+  function buildQuery({withAjax=true, page=null} = {}){
+    const params = new URLSearchParams();
+
+    // 검색어
+    if (searchForm) {
+      const q = new FormData(searchForm).get('q');
+      if (q) params.set('q', q);
+    }
+
+    // 기타 필터
+    const fd = new FormData(filterForm);
+    for (const [k, v] of fd.entries()) {
+      if (k === 'accord') continue;
+      params.append(k, v);
+    }
+
+    // accord 확장 처리
+    document.querySelectorAll('input[name="accord"]:checked').forEach(cb => {
+      const syns = (cb.dataset.synonyms || cb.value).split('|').map(s=>s.trim()).filter(Boolean);
+      const uniq = Array.from(new Set(syns));
+      uniq.forEach(s => params.append('accord', s));
+    });
+
+    if (page) params.set('page', page);
+    if (withAjax) params.set('ajax','1');
+    return params.toString();
+  }
+
+  /*결과 목록 갱신*/
+  async function refresh() {
+    const url = window.location.pathname + '?' + buildQuery({withAjax:true});
+    const res = await fetch(url);
+    const html = await res.text();
+    products.innerHTML = html;
+    history.replaceState(null, '', '?' + buildQuery({withAjax:false}));
+  }
+
+  
+   /*이벤트 바인딩*/
+  filterForm.addEventListener('change', (e) => {
+    if (e.target && e.target.type === 'checkbox') {
+      e.preventDefault();
+      refresh();
+    }
+  });
+
+  // 검색창 submit 시
+  searchForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    // filterForm에도 q 히든 동기화
+    let hidden = filterForm.querySelector('input[name="q"][type="hidden"]');
+    if (!hidden) {
+      hidden = document.createElement('input');
+      hidden.type = 'hidden'; hidden.name = 'q';
+      filterForm.appendChild(hidden);
+    }
+    hidden.value = (new FormData(searchForm).get('q') || '');
+    refresh();
+  });
+
+  // 페이지네이션(AJAX)
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-ajax-pg]');
+    if (!a) return;
+    e.preventDefault();
+    const pg = new URL(a.href).searchParams.get('page') || '1';
+    const url = window.location.pathname + '?' + buildQuery({withAjax:true, page:pg});
+    fetch(url)
+      .then(r => r.text())
+      .then(html => {
+        products.innerHTML = html;
+        history.replaceState(null, '', '?' + buildQuery({withAjax:false, page:pg}));
+      });
+  });
+
+  // 최초 1회: 메인어코드 리스트 통합 실행
+  rebuildAccordList();
+})();
+</script>
+{% endblock script %}

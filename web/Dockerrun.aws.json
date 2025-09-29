@@ -1,0 +1,22 @@
+{
+  "AWSEBDockerrunVersion": "1",
+  "Image": {
+    "Name": "jung33010/django-cicd-app:latest",
+    "Update": "true"
+  },
+  "Ports": [
+    {
+      "ContainerPort": 8000,
+      "HostPort": 8000
+    }
+  ],
+  "Environment": {
+    "DB_HOST": "$DB_HOST",
+    "DB_USER": "$DB_USER",
+    "DB_PASSWORD": "$DB_PASSWORD",
+    "DB_NAME": "$DB_NAME",
+    "DB_PORT": "$DB_PORT"
+  },
+  "Volumes": [],
+  "Logging": "/var/log/nginx"
+}

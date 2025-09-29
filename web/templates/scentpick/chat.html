@@ -1,0 +1,569 @@
+{% extends "scentpick/base.html" %}
+{% block title %}ScentPick Chat{% endblock %}
+{% block content %}
+<div class="chat-container">
+
+  <!-- 마크다운 렌더링 간격 최소화 CSS -->
+  <style>
+    .markdown-body {
+      white-space: pre-wrap !important;
+      overflow-wrap: anywhere;
+      word-break: keep-all;
+      line-height: 1.4;
+    }
+    .markdown-body > * { margin: 0 !important; }
+    .markdown-body > * + * { margin-top: 0.3em !important; }
+    .markdown-body h1, .markdown-body h2, .markdown-body h3,
+    .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+      margin: 0.4em 0 0.2em 0 !important;
+      line-height: 1.2;
+    }
+    .markdown-body p { margin: 0.2em 0 !important; }
+    .markdown-body ul, .markdown-body ol {
+      margin: 0.2em 0 !important;
+      padding-left: 1.2em;
+    }
+    .markdown-body li { margin: 0 !important; padding: 0.1em 0; }
+    .markdown-body li > p { margin: 0 !important; display: inline; }
+    .markdown-body blockquote {
+      margin: 0.3em 0 !important;
+      padding: 0.3em 0.6em;
+      border-left: 3px solid #ddd;
+      background: #f9f9f9;
+    }
+    .markdown-body pre {
+      margin: 0.3em 0 !important;
+      padding: 0.4em 0.6em;
+      border-radius: 4px;
+      background: #f6f8fa;
+      overflow-x: auto;
+    }
+    .markdown-body code {
+      padding: 0.1em 0.3em;
+      background: #f0f0f0;
+      border-radius: 3px;
+    }
+    .markdown-body pre code {
+      padding: 0;
+      background: transparent;
+    }
+    .markdown-body strong { font-weight: 600; }
+    .markdown-body em { font-style: italic; }
+
+    /* 업로드 버튼 */
+    .upload-btn {
+      cursor: pointer;
+      margin-right: 6px;
+      display: flex;
+      align-items: center;
+    }
+    .icon {
+      width: 20px;
+      height: 20px;
+      stroke: #aaa;
+    }
+
+    /* 입력창 + 미리보기 */
+    .chat-input-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .preview-wrapper {
+      position: relative;
+      width: 80px;
+      height: 80px;
+      margin-left: 6px; 
+    }
+
+    .preview-thumb {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 10px;
+      border: 1px solid #ddd;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    .remove-btn {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+  </style>
+
+  <div class="chat-sidebar">
+    <button class="new-chat-btn" id="newChatBtn">새 채팅</button>
+    <ul class="chat-history" id="chatHistory">
+      {% if recent_conversations %}
+        {% for conversation in recent_conversations %}
+          <li class="conversation-item{% if conversation.id == current_conversation_id %} active{% endif %}"
+              data-conversation-id="{{ conversation.id }}">
+            {{ conversation.title|default:"대화"|truncatechars:25 }}
+          </li>
+        {% endfor %}
+      {% else %}
+        <li class="no-conversations">아직 대화가 없습니다.</li>
+      {% endif %}
+    </ul>
+  </div>
+
+  <div class="chat-main">
+    <div class="chat-header">
+      <h3 style="margin-bottom:10px;">ScentPick AI 챗봇</h3>
+      <div class="chat-examples">💡 예시: "30대 남자가 자주 찾는 향수 알려줘", "코튼 향의 20만원 이하 향수"</div>
+    </div>
+
+    <div class="chat-messages" id="chatMessages"></div>
+
+    <!-- 입력창 + 미리보기 -->
+    <div class="chat-input-wrapper">
+      <!-- 이미지 미리보기 -->
+      <div id="previewWrapper" class="preview-wrapper" style="display:none;">
+        <img id="previewImage" src="" alt="미리보기" class="preview-thumb"/>
+        <button id="removeImage" class="remove-btn">✖</button>
+      </div>
+
+      <!-- 입력창 -->
+      <div class="chat-input">
+        <label for="imageUpload" class="upload-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" class="icon" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </label>
+        <input id="imageUpload" type="file" accept="image/*" style="display:none;" />
+
+        <input type="text" placeholder="메시지를 입력하세요..." id="chatInput" autocomplete="off">
+        <button class="send-btn" id="chatSendBtn">전송</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock content %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
+<script>
+  function getCookie(name) {
+    const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return m ? m.pop() : '';
+  }
+  const CSRF_TOKEN = getCookie('csrftoken');
+  const SERVICE_TOKEN = "{{ SERVICE_TOKEN }}";
+
+  let INITIAL_MESSAGES = [];
+  try {
+    const messagesData = '{{ chat_messages|escapejs }}';
+    INITIAL_MESSAGES = (messagesData && messagesData !== '[]') ? JSON.parse(messagesData) : [];
+  } catch (e) { INITIAL_MESSAGES = []; }
+
+  (function () {
+    const sendBtn = document.getElementById("chatSendBtn");
+    const input   = document.getElementById("chatInput");
+    const box     = document.getElementById("chatMessages");
+    const newBtn  = document.getElementById("newChatBtn");
+    const historyList = document.getElementById("chatHistory");
+
+    const perfume_facts = [
+      // 🪄 향수 기본 개념
+      "톱 노트는 뿌리고 10분 내에 느껴지는 첫인상이에요. 시트러스·허브 향이 많아요!",
+      "미들(하트) 노트는 30분~2시간 지속되는 중심 향이에요. 플로럴/스파이시 계열이 자주 쓰여요.",
+      "베이스 노트는 잔향 단계로, 우디·머스크·바닐라가 오래 남아요.",
+      "퍼퓸(Extrait)은 농도 20% 이상으로 하루 종일 가는 진한 타입이에요.",
+      "EDP(오 드 퍼퓸)는 약 8시간 지속돼요. 데일리로 제일 많이 쓰여요.",
+      "EDT(오 드 뚜왈렛)는 가볍고 산뜻해서 5시간 정도 지속돼요.",
+      "EDC(오 드 코롱)는 상쾌하지만 2시간 정도면 사라져요.",
+      "바디 미스트는 은은하게 1~3% 농도로 금방 사라져요.",
+      "드라이 다운은 최종 잔향으로, 체취와 개성에 따라 달라져요.",
+      "향수는 보통 톱·미들·베이스 3단계 구조로 설계돼요.",
+
+      // 🪄 보관 & 사용법
+      "향수는 햇빛·고온을 피하고, 서늘하고 어두운 곳에 두는 게 좋아요.",
+      "냉장 보관은 향을 깨뜨릴 수 있어서 권장되지 않아요.",
+      "개봉 후 유효기간은 보통 1~3년이에요. 빛·공기 노출에 따라 달라져요.",
+      "남은 향수는 키친타월에 흡수시켜 버리고, 용기는 분리배출하세요.",
+      "비행기 기내엔 100ml 이하만 투명 지퍼백에 담아 가져갈 수 있어요.",
+      "휴대용 아톰라이저에 리필하면 여행할 때 편리해요.",
+      "공중에 뿌리고 지나가면 옷과 머리에 은은하게 남아요.",
+      "머리카락엔 너무 가까이 뿌리면 건조해지니 살짝 거리를 두세요.",
+      "실크·가죽엔 얼룩질 수 있어 피부에 뿌리는 게 안전해요.",
+      "지성 피부가 건성 피부보다 향이 더 오래 남아요.",
+
+      // 🪄 시향 & 구매 팁
+      "블로터(종이) 시향은 1~2분 뒤 맡아야 더 정확해요.",
+      "피부 시향으로 체취와 어울리는지 꼭 확인해보세요.",
+      "한 번에 3~4개 이상 시향하면 코가 쉽게 피곤해져요.",
+      "시향 사이엔 원두 냄새를 맡으면 도움이 돼요.",
+      "샘플을 며칠간 써보고 정품을 사면 실패가 줄어요.",
+      "여름엔 시트러스/아쿠아, 겨울엔 우디/앰버가 잘 어울려요.",
+      "오피스엔 은은하게, 데이트엔 관능적인 향도 좋아요.",
+      "20대는 상큼한 플로럴, 30대 이후엔 깊은 우디 향을 선호하기도 해요.",
+      "유니섹스 향수는 중성적이라 누구나 잘 어울려요.",
+      "시그니처 향을 정해 꾸준히 쓰는 것도 멋져요 ✨",
+
+      // 🪄 향수 원료 & 조향
+      "천연 원료는 추출 방식에 따라 가격이 크게 달라져요.",
+      "합성 원료는 대량 생산 가능하고 알레르기 위험도 줄여줘요.",
+      "머스크는 지금은 거의 합성 원료를 써요.",
+      "앰버는 과거 고래 향유였지만, 지금은 합성 대체품을 써요.",
+      "우디 계열은 샌달우드·시더우드가 대표적이에요.",
+      "플로럴 계열은 장미, 재스민, 일랑일랑이 대표적이에요.",
+      "스파이시 계열은 계피·카다몸·후추 같은 향신료에서 나와요.",
+      "시트러스 계열은 레몬·베르가못·오렌지가 많아요.",
+      "아쿠아 계열은 바다 느낌 나는 합성 향료예요.",
+      "구르망 계열은 바닐라·초콜릿·커피 같은 달콤한 향이에요.",
+
+      // 🪄 향수 문화 & 트렌드
+      "니치 향수는 독창성과 개성을 강조하는 소규모 브랜드예요.",
+      "빈티지 향수는 단종돼서 수집가들한테 인기가 많아요.",
+      "커플 향수는 같은 콘셉트로 남녀용을 함께 출시해요.",
+      "한정판 향수는 시즌·콜라보 제품으로 소장 가치가 높아요.",
+      "향은 기억과 감정에 연결돼 기분을 바꾸는 힘이 있어요.",
+      "밀폐된 공간에서 향수를 과하게 뿌리면 매너 위반이에요.",
+      "레이어링으로 자신만의 향을 만들 수 있어요 ✨",
+      "퍼퓸 오일은 알코올이 적어 피부에 순하고 오래가요.",
+      "향수 가격엔 원료 외에도 디자인·브랜드 이미지가 크게 반영돼요.",
+      "최근 향수 트렌드는 젠더리스·지속가능성·천연 원료예요."
+    ];
+
+    // 이미지 업로드/미리보기
+    const fileInput = document.getElementById("imageUpload");
+    const previewWrapper = document.getElementById("previewWrapper");
+    const previewImage = document.getElementById("previewImage");
+    const removeImage = document.getElementById("removeImage");
+    let uploadedFile = null;
+
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      // 허용 확장자 목록
+      const allowedExtensions = ["jpg", "jpeg", "png", "gif"];
+      const maxSize = 5 * 1024 * 1024; // 5MB
+
+      // 파일 확장자 확인
+      const ext = file.name.split(".").pop().toLowerCase();
+      if (!allowedExtensions.includes(ext)) {
+        showToast("이미지 파일이 아닙니다. (허용: JPG, JPEG, PNG, GIF)", "error");
+        fileInput.value = "";
+        uploadedFile = null;
+        return;
+      }
+
+      // 파일 크기 확인
+      if (file.size > maxSize) {
+        showToast("이미지 크기는 5MB 이하여야 합니다.", "error");
+        fileInput.value = "";
+        uploadedFile = null;
+        return;
+      }
+
+      // 통과 시 미리보기 표시
+      uploadedFile = file;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        previewImage.src = e.target.result;
+        previewWrapper.style.display = "block";
+      };
+      reader.readAsDataURL(file);
+    });
+    
+    removeImage.addEventListener("click", () => {
+      uploadedFile = null;
+      fileInput.value = "";
+      previewWrapper.style.display = "none";
+    });
+
+    // 서버에서 내려준 초기 컨텍스트
+    let conversationId = {% if current_conversation_id %}{{ current_conversation_id }}{% else %}null{% endif %};
+    let externalThreadId = {% if external_thread_id %}"{{ external_thread_id }}"{% else %}null{% endif %};
+
+    // 대화 목록 불러오기
+    async function loadConversations() {
+      try {
+        const resp = await fetch("{% url 'scentpick:conversations_api' %}", {
+          method: "GET",
+          headers: { "X-CSRFToken": CSRF_TOKEN, "X-Service-Token": SERVICE_TOKEN }
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        historyList.innerHTML = '';
+        if (data.items && data.items.length > 0) {
+          data.items.forEach(conv => {
+            const li = document.createElement("li");
+            li.className = "conversation-item";
+            if (conv.id == conversationId) li.className += " active";
+            li.dataset.conversationId = conv.id;
+            li.textContent = conv.title || `대화 ${conv.id}`;
+            li.addEventListener('click', () => window.loadConversation(conv.id));
+            historyList.appendChild(li);
+          });
+        } else {
+          historyList.innerHTML = '<li class="no-conversations">아직 대화가 없습니다.</li>';
+        }
+      } catch (e) {
+        console.error('대화 목록 불러오기 실패:', e);
+        historyList.innerHTML = '<li class="error">대화 목록을 불러올 수 없습니다</li>';
+      }
+    }
+
+    // 특정 대화 불러오기
+    window.loadConversation = async function(convId) {
+      try {
+        document.querySelectorAll('.conversation-item').forEach(item => item.classList.remove('active'));
+        const act = document.querySelector(`[data-conversation-id="${convId}"]`);
+        if (act) act.classList.add('active');
+
+        const resp = await fetch(`{% url 'scentpick:conversation_messages_api' conv_id=0 %}`.replace('0', convId), {
+          method: "GET",
+          headers: { "X-CSRFToken": CSRF_TOKEN, "X-Service-Token": SERVICE_TOKEN }
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+        const data = await resp.json();
+        conversationId = data.conversation_id;
+        box.innerHTML = '';
+
+        if (data.items && data.items.length > 0) {
+          data.items.forEach(msg => {
+            const el = addMessage(msg.content, msg.role === 'user', true, msg.chat_image);
+            if (msg.role === 'assistant' && msg.perfume_list && msg.perfume_list.length > 0) {
+              addPerfumeRecommendations(el.wrap, msg.perfume_list);
+            }
+          });
+        } else {
+          console.log('메시지가 없음');
+          addMessage("이 대화에는 아직 메시지가 없습니다.", false, false);
+        }
+      } catch (e) {
+        console.error('대화 불러오기 실패:', e);
+        if (e.message && !e.message.includes('404')) {
+          addMessage(`대화를 불러오는 중 문제가 발생했습니다.`, false, false);
+        }
+      }
+    }
+
+    // 새 채팅 시작
+    async function startNewChat() {
+      try {
+        const resp = await fetch("{% url 'scentpick:chat_new_api' %}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRFToken": CSRF_TOKEN }
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        conversationId = null;
+        externalThreadId = data.external_thread_id;
+
+        box.innerHTML = "";
+        addMessage("안녕하세요! ScentPick AI입니다. 어떤 향수를 찾고 계신가요?", false, false);
+        document.querySelectorAll('.conversation-item').forEach(i => i.classList.remove('active'));
+        input.focus();
+      } catch (e) {
+        console.error('새 채팅 시작 실패:', e);
+        addMessage(`새 채팅을 시작하는 중 문제가 발생했습니다.`, false, false);
+      }
+    }
+
+    function renderMarkdown(text) {
+      try {
+        if (typeof marked === 'undefined') return (text ?? '').replace(/\n/g, '<br>');
+        marked.setOptions({ gfm: true, breaks: true, headerIds: false, mangle: false, sanitize: false });
+        return marked.parse((text ?? '').replace(/\\n/g, '\n'));
+      } catch (e) { return (text ?? '').replace(/\n/g, '<br>'); }
+    }
+
+    function addMessage(msg, isUser = false, useMarkdown = true, imageUrl = null) {
+      const wrap  = document.createElement("div");
+      wrap.className = "message" + (isUser ? " user" : "");
+
+      // 이미지가 있으면 먼저 이미지 추가
+      if (imageUrl) {
+        const imgDiv = document.createElement("div");
+        imgDiv.className = "message-image";
+        imgDiv.innerHTML = `<img src="${imageUrl}" alt="업로드된 이미지" style="max-width: 300px; max-height: 300px; border-radius: 8px; margin-bottom: 8px;">`;
+        wrap.appendChild(imgDiv);
+      }
+
+      // 텍스트 메시지 추가
+      if (msg && msg.trim()) {
+        const inner = document.createElement("div");
+        inner.className = "message-content";
+        inner.innerHTML = useMarkdown ? renderMarkdown(msg) : msg;
+        wrap.appendChild(inner);
+      }
+
+      box.appendChild(wrap);
+      box.scrollTop = box.scrollHeight;
+      return { wrap, inner: wrap.querySelector('.message-content') };
+    }
+
+    function addPerfumeRecommendations(messageWrap, perfumes) {
+      if (!perfumes || perfumes.length === 0) return;
+      const div = document.createElement("div");
+      div.className = "perfume-recommendations";
+      perfumes.slice(0, 5).forEach(p => {
+        const btn = document.createElement("button");
+        btn.className = "perfume-btn";
+        btn.textContent = `${p.brand} - ${p.name}`;
+        btn.onclick = () => { window.location.href = `/perfume/${p.id}/`; };
+        div.appendChild(btn);
+      });
+      messageWrap.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function addLoading() {
+      const fact = perfume_facts[Math.floor(Math.random() * perfume_facts.length)];
+      return addMessage(`답변을 준비하고 있어요...<br>💡 TIP: ${fact}`, false, false);
+    }
+
+    async function send() {
+      const txt = (input.value || "").trim();
+      if (!txt && !uploadedFile) return;
+
+      // 전송할 값 미리 백업
+      const sendText = txt;
+      const sendImage = uploadedFile;
+
+      const userImageUrl = sendImage ? previewImage.src : null;
+      addMessage(sendText, true, false, userImageUrl);
+
+      let fullText = "";  // 전체 응답 누적용
+
+      // 버튼 누르는 순간 입력창/미리보기 초기화
+      input.value = "";                     
+      previewWrapper.style.display = "none";
+
+      sendBtn.disabled = true;
+      input.disabled = true;
+      const loader = addLoading();
+
+      try {
+        const formData = new FormData();
+        formData.append("content", sendText);
+        if (sendImage) formData.append("image", sendImage);
+
+        // conversation_id 유지해서 보내기
+        if (conversationId) {
+          formData.append("conversation_id", conversationId);
+        }
+
+        const response = await fetch("{% url 'scentpick:chat_stream_api' %}", {
+          method: "POST",
+          headers: { "X-CSRFToken": CSRF_TOKEN, "X-Service-Token": SERVICE_TOKEN },
+          body: formData
+        });
+
+        if (!response.ok) {
+          loader.inner.innerHTML = renderMarkdown(`오류: HTTP ${response.status}`);
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let currentContent = '';
+        let firstChunk = true; 
+
+        loader.inner.classList.add("markdown-body");
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const text = decoder.decode(value, { stream: true });
+          const lines = text.split('\n');
+
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.error) {
+                loader.inner.innerHTML = renderMarkdown(`오류: ${data.error}`);
+                return;
+              }
+              if (data.content) {
+                if (firstChunk) {
+                  loader.inner.innerHTML = "";
+                  loader.inner.classList.add("markdown-body");
+                  firstChunk = false;
+                }
+
+                // 전체 텍스트 누적
+                fullText += data.content;
+
+                // 받은 chunk를 글자 단위로 쪼개기
+                for (const char of data.content) {
+                  await new Promise(resolve => setTimeout(resolve, 20)); // 글자당 20ms 딜레이
+                  const span = document.createElement("span");
+                  span.textContent = char;
+                  loader.inner.appendChild(span);
+                  box.scrollTop = box.scrollHeight;
+                }
+              }
+              if (data.done) {
+                if (data.conversation_id) {
+                  conversationId = data.conversation_id;
+                }
+                if (data.perfume_list && data.perfume_list.length > 0) {
+                  addPerfumeRecommendations(loader.wrap, data.perfume_list);
+                }
+
+                // 스트리밍이 끝나면 전체를 마크다운 렌더링으로 교체
+                loader.inner.innerHTML = renderMarkdown(fullText);
+
+                return;
+              }
+            } catch (e) { console.error("파싱 오류:", e, line); }
+          }
+        }
+      } catch (e) {
+        loader.inner.innerHTML = renderMarkdown(`오류: ${e.message}`);
+      } finally {
+        // 전송 끝난 후 업로드 상태만 초기화
+        uploadedFile = null;
+        fileInput.value = "";
+
+        sendBtn.disabled = false;
+        input.disabled = false;
+        input.focus();
+      }
+    }
+
+    sendBtn.addEventListener("click", send);
+    input.addEventListener("keypress", (e) => { if (e.key === "Enter") send(); });
+    newBtn.addEventListener("click", startNewChat);
+
+    // 초기 메시지 복원
+    if (INITIAL_MESSAGES && INITIAL_MESSAGES.length > 0) {
+      INITIAL_MESSAGES.forEach(msg => {
+        const el = addMessage(msg.content, msg.role === 'user', true, msg.chat_image);
+        if (msg.role === 'assistant' && msg.perfume_list) {
+          addPerfumeRecommendations(el.wrap, msg.perfume_list);
+        }
+      });
+    } else {
+      addMessage("안녕하세요! ScentPick AI입니다. 어떤 향수를 찾고 계신가요?", false, false);
+    }
+
+    // 기존 대화 항목들에 클릭 이벤트 리스너 추가
+    document.querySelectorAll('.conversation-item[data-conversation-id]').forEach(item => {
+      item.addEventListener('click', () => {
+        const convId = parseInt(item.dataset.conversationId);
+        window.loadConversation(convId);
+      });
+    });
+
+  })();
+</script>
+{% endblock %}
